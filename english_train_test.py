@@ -7,14 +7,17 @@ import time
 import random
 from sklearn.metrics import accuracy_score
 import numpy as np
+import wandb
+import tqdm
 
 random.seed(42)
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-batch = 4
+batch = 8
 sample_num = 19
 learning_rate = 3e-5
 
+wandb.init(project="quoter", name="quoter")
 
 # loading dataset
 def load_data(path):
@@ -86,16 +89,14 @@ def make_context_tensors(former, latter):
 
 
 print("loading train and valid data......")
-train_input_ids, train_token_type_ids, train_attention_masks, train_mask_ids = make_context_tensors(
-    train_former, train_latter)
-valid_input_ids, valid_token_type_ids, valid_attention_masks, valid_mask_ids = make_context_tensors(
-    valid_former, valid_latter)
+train_input_ids, train_token_type_ids, train_attention_masks, train_mask_ids = make_context_tensors(train_former, train_latter)
+valid_input_ids, valid_token_type_ids, valid_attention_masks, valid_mask_ids = make_context_tensors(valid_former, valid_latter)
+
 print("train bert input:")
-print(train_input_ids.shape, train_token_type_ids.shape,
-      train_attention_masks.shape, train_mask_ids.shape)
+print(train_input_ids.shape, train_token_type_ids.shape, train_attention_masks.shape, train_mask_ids.shape)
+
 print("valid bert input:")
-print(valid_input_ids.shape, valid_token_type_ids.shape,
-      valid_attention_masks.shape, valid_mask_ids.shape)
+print(valid_input_ids.shape, valid_token_type_ids.shape, valid_attention_masks.shape, valid_mask_ids.shape)
 
 
 # Dataset and DataLoader
@@ -113,11 +114,9 @@ class Dataset(Dataset):
 
     def __getitem__(self, idx):
         if self.quote is None:
-            return self.input_ids[idx], self.token_type_ids[
-                idx], self.attention_masks[idx], self.mask_ids[idx]
-        return self.input_ids[idx], self.token_type_ids[
-            idx], self.attention_masks[idx], self.mask_ids[idx], self.quote[
-                idx]
+            return self.input_ids[idx], self.token_type_ids[idx], self.attention_masks[idx], self.mask_ids[idx]
+        else:
+            return self.input_ids[idx], self.token_type_ids[idx], self.attention_masks[idx], self.mask_ids[idx], self.quote[idx]
 
 
 print("loading train and valid dataloader ...")
@@ -126,15 +125,18 @@ train_dataset = Dataset(input_ids=train_input_ids,
                         attention_masks=train_attention_masks,
                         mask_ids=train_mask_ids,
                         quote=train_quote)
+
 train_loader = DataLoader(dataset=train_dataset,
                           batch_size=batch,
                           shuffle=True,
                           num_workers=2)
+
 valid_dataset = Dataset(input_ids=valid_input_ids,
                         token_type_ids=valid_token_type_ids,
                         attention_masks=valid_attention_masks,
                         mask_ids=valid_mask_ids,
                         quote=valid_quote)
+
 valid_loader = DataLoader(dataset=valid_dataset,
                           batch_size=batch,
                           shuffle=True,
@@ -245,76 +247,95 @@ model.to(device)
 def training(model, epoch, train, valid, device):
     total = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print('\nstart training, parameter total:{}, trainable:{}\n'.format(
-        total, trainable))
+    print('\nstart training, parameter total:{}, trainable:{}\n'.format(total, trainable))
+
     t_batch = len(train)
     v_batch = len(valid)
+
     model.train()
     criterion = nn.CrossEntropyLoss()
     optimizer = AdamW(model.parameters(), lr=learning_rate)
+
     best_acc = 0
     count = 0
+
     for epoch in range(epoch):
         start = time.perf_counter()
         total_loss, total_acc = 0, 0
         print("epoch: ", epoch + 1)
-        # train
-        for i, (input_ids, token_type_ids, attention_masks, mask_ids,
-                quotes) in enumerate(train):
+
+        # training
+        for i, (input_ids, token_type_ids, attention_masks, mask_ids,quotes) in enumerate(tqdm(train)):
             input_ids = input_ids.to(device)
             token_type_ids = token_type_ids.to(device)
             attention_masks = attention_masks.to(device)
             mask_ids = mask_ids.to(device, dtype=torch.long)
+
             optimizer.zero_grad()
-            outputs, labels = model(input_ids, token_type_ids, attention_masks,
-                                    mask_ids, quotes)
+
+            outputs, labels = model(input_ids, token_type_ids, attention_masks, mask_ids, quotes)
+
             labels = labels.to(device, dtype=torch.long)
             loss = criterion(outputs, labels)
+
             loss.backward()
             optimizer.step()
+
             _, pred = torch.max(outputs.cpu().data, 1)
+
             acc = accuracy_score(pred, labels.cpu())
             total_loss += loss.item()
             total_acc += acc
-        print('Train | Loss:{:.5f} Acc:{:.3f}'.format(total_loss,
-                                                      total_acc / t_batch))
+
+            wandb.log({"train loss": loss.item(), "train accuracy": acc})
+
+        print('Train | Loss:{:.5f} Acc:{:.3f}'.format(total_loss, total_acc / t_batch))
+
         # validation
         model.eval()
         with torch.no_grad():
             total_loss, total_acc = 0, 0
-            for i, (input_ids, token_type_ids, attention_masks, mask_ids,
-                    quotes) in enumerate(valid):
+
+            for i, (input_ids, token_type_ids, attention_masks, mask_ids, quotes) in enumerate(tdqm(valid)):
                 input_ids = input_ids.to(device)
                 token_type_ids = token_type_ids.to(device)
                 attention_masks = attention_masks.to(device)
+
                 mask_ids = mask_ids.to(device, dtype=torch.long)
-                outputs, labels = model(input_ids, token_type_ids,
-                                        attention_masks, mask_ids, quotes)
+                outputs, labels = model(input_ids, token_type_ids, attention_masks, mask_ids, quotes)
+
                 labels = labels.to(device, dtype=torch.long)
                 loss = criterion(outputs, labels)
+
                 _, pred = torch.max(outputs.cpu().data, 1)
                 acc = accuracy_score(pred, labels.cpu())
+
                 total_loss += loss.item()
                 total_acc += acc
-            print('Valid | Loss:{:.5f} Acc:{:.3f}'.format(
-                total_loss, total_acc / v_batch))
+
+            print('Valid | Loss:{:.5f} Acc:{:.3f}'.format(total_loss, total_acc / v_batch))
+            wandb.log({"val loss": total_loss, "val accuracy": total_acc / v_batch})
+
             if total_acc > best_acc:
                 best_acc = total_acc
+
                 if os.path.exists("./model"):
                     pass
                 else:
                     os.mkdir("./model")
-                torch.save(
-                    model.quote_model.state_dict(), "./model/english_quote.pth")
-                torch.save(
-                    model.contex_model.state_dict(), "./model/english_context.pth")
+
+                torch.save(model.quote_model.state_dict(), "./model/english_quote.pth")
+                torch.save(model.contex_model.state_dict(), "./model/english_context.pth")
+
                 print('saving model with Acc {:.3f} '.format(total_acc / v_batch))
                 count = 0
             else:
                 count += 1
+
         model.train()
         end = time.perf_counter()
         print('epoch running time:{:.0f}s'.format(end - start))
+
         # early stopping
         if count == 3:
             break
@@ -358,6 +379,7 @@ quote_input_ids = quote_input_ids.to(device)
 
 quote_embeddings = []
 quote_model.eval()
+
 with torch.no_grad():
     i = 0
     for input_ids in quote_input_ids:
