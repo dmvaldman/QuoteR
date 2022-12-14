@@ -8,7 +8,6 @@ import random
 from sklearn.metrics import accuracy_score
 import numpy as np
 import wandb
-import tqdm
 
 random.seed(42)
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -266,7 +265,7 @@ def training(model, epoch, train, valid, device):
         print("epoch: ", epoch + 1)
 
         # training
-        for i, (input_ids, token_type_ids, attention_masks, mask_ids,quotes) in enumerate(tqdm(train)):
+        for i, (input_ids, token_type_ids, attention_masks, mask_ids,quotes) in enumerate(train):
             input_ids = input_ids.to(device)
             token_type_ids = token_type_ids.to(device)
             attention_masks = attention_masks.to(device)
