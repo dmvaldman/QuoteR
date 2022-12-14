@@ -242,6 +242,7 @@ contex_model = Context_Encoder()
 quote_model = Quote_Encoder()
 model = QuotRec_Net(contex_model, quote_model)
 model.to(device)
+wandb.watch(model)
 
 
 def training(model, epoch, train, valid, device):
